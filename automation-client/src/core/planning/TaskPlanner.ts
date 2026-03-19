@@ -57,7 +57,7 @@ TOOLS (allowed actions):
     const response = await this.llm.generate({
       model: this.model,
       temperature: 0.2,
-      maxTokens: 900,
+      maxTokens: 260,
       messages: [
         { role: 'system', content: this.TOOL_SYSTEM_PROMPT },
         {
@@ -91,7 +91,7 @@ TOOLS (allowed actions):
     const response = await this.llm.generate({
       model: this.model,
       temperature: 0.2,
-      maxTokens: 900,
+      maxTokens: 220,
       messages: [
         {
           role: 'system',
@@ -118,7 +118,7 @@ TOOLS (allowed actions):
   private safeStringify(v: any) {
     try {
       const s = typeof v === 'string' ? v : JSON.stringify(v);
-      return s.length > 4000 ? `${s.slice(0, 4000)}...` : s;
+      return s.length > 1800 ? `${s.slice(0, 1800)}...` : s;
     } catch {
       return String(v);
     }

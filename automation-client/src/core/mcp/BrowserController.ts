@@ -86,8 +86,7 @@ export class BrowserController {
             selector: action.selector,
           });
           const ok = this.assertToolSuccess('click', res);
-          this.rememberContext(action, ok);
-          return ok;
+          return await this.finalizeClickResult(tabId, action, action.selector, ok);
         } catch (e) {
           const err = e as Error;
           if (!this.isElementNotFoundError(err.message)) throw err;
@@ -95,8 +94,12 @@ export class BrowserController {
           if (this.isSearchSubmitSelector(action.selector)) {
             const alt = await this.trySearchButtonFallbackClick(tabId, action.selector);
             if (alt) {
-              this.rememberContext({ ...action, selector: String(alt.selector ?? action.selector) }, alt);
-              return alt;
+              return await this.finalizeClickResult(
+                tabId,
+                action,
+                String(alt.selector ?? action.selector),
+                alt,
+              );
             }
 
             const navFallback = await this.trySearchUrlFallback(tabId);
@@ -109,16 +112,34 @@ export class BrowserController {
           if (this.isVacancyListSelector(action.selector)) {
             const alt = await this.tryVacancyCardFallbackClick(tabId, action.selector);
             if (alt) {
-              this.rememberContext({ ...action, selector: String(alt.selector ?? action.selector) }, alt);
-              return alt;
+              return await this.finalizeClickResult(
+                tabId,
+                action,
+                String(alt.selector ?? action.selector),
+                alt,
+              );
             }
           }
 
           if (this.isResponseSelector(action.selector)) {
             const alt = await this.tryResponseButtonFallbackClick(tabId, action.selector);
             if (alt) {
-              this.rememberContext({ ...action, selector: String(alt.selector ?? action.selector) }, alt);
-              return alt;
+              return await this.finalizeClickResult(
+                tabId,
+                action,
+                String(alt.selector ?? action.selector),
+                alt,
+              );
+            }
+
+            const recovered = await this.tryOpenVacancyAndRetryResponse(tabId, action.selector);
+            if (recovered) {
+              return await this.finalizeClickResult(
+                tabId,
+                action,
+                String(recovered.selector ?? action.selector),
+                recovered,
+              );
             }
           }
 
@@ -266,7 +287,104 @@ export class BrowserController {
   }
 
   private isResponseSelector(selector: string) {
-    return /response|respond|apply|отклик/i.test(selector);
+    return /response|respond|apply|otklik|vacancy-response/i.test(selector);
+  }
+
+  private isVacancyUrl(url: string | null | undefined) {
+    if (!url) return false;
+    return /https?:\/\/[^/]*hh\.ru\/vacancy\//i.test(url);
+  }
+
+  private isSearchResultsUrl(url: string) {
+    return /\/search\/vacancy/i.test(url);
+  }
+
+  private async finalizeClickResult(
+    tabId: string,
+    action: BrowserAction,
+    selectorUsed: string,
+    rawResult: any,
+  ) {
+    let result = rawResult;
+    if (this.isVacancyListSelector(selectorUsed)) {
+      const ensured = await this.ensureVacancyPageAfterTitleClick(tabId, selectorUsed, rawResult);
+      if (ensured) result = ensured;
+    }
+    this.rememberContext({ ...action, selector: selectorUsed }, result);
+    return result;
+  }
+
+  private async ensureVacancyPageAfterTitleClick(
+    tabId: string,
+    selectorUsed: string,
+    result: any,
+  ) {
+    if (this.isVacancyUrl(result?.url) || this.isVacancyUrl(this.lastKnownUrl)) {
+      return result;
+    }
+
+    const switched = await this.trySwitchToVacancyTab();
+    if (switched) {
+      return {
+        ...result,
+        switchedToVacancyTab: true,
+        tabId: this.tabId,
+        url: this.lastKnownUrl ?? result?.url,
+      };
+    }
+
+    const navigated = await this.tryNavigateToVacancyBySelector(tabId, selectorUsed);
+    if (navigated) {
+      return {
+        ...navigated,
+        navigatedToVacancyByHref: true,
+        selector: selectorUsed,
+      };
+    }
+
+    return null;
+  }
+
+  private async trySwitchToVacancyTab() {
+    try {
+      const tabs = await this.mcp.listTabs();
+      if (!tabs.length) return false;
+
+      const vacancyTabs = tabs.filter((t) => this.isVacancyUrl(String(t?.url ?? '')));
+      if (!vacancyTabs.length) return false;
+
+      const currentId = this.tabId;
+      const preferred =
+        vacancyTabs.find((t) => String(t?.tabId ?? t?.id ?? '') !== currentId) ??
+        vacancyTabs[0];
+
+      const nextId = String(preferred?.tabId ?? preferred?.id ?? '').trim();
+      if (!nextId) return false;
+
+      this.tabId = nextId;
+      this.lastKnownUrl = String(preferred?.url ?? this.lastKnownUrl ?? '');
+      this.logger(`[MCP] switched to vacancy tabId=${this.tabId}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async tryOpenVacancyAndRetryResponse(tabId: string, originalSelector: string) {
+    if (!this.isSearchResultsUrl(this.lastKnownUrl ?? '')) return null;
+
+    this.logger('[MCP] response fallback: not on vacancy page, opening first vacancy...');
+    const opened = await this.tryNavigateToVacancyBySelector(tabId, "a[data-qa='serp-item__title']");
+    if (!opened) return null;
+
+    await sleep(900);
+    const retrySelectors = [originalSelector, ...this.getResponseSelectorCandidates()];
+    const retried = await this.tryClickCandidates(tabId, '', retrySelectors);
+    if (!retried) return null;
+    return {
+      ...retried,
+      recoveredByOpeningVacancy: true,
+    };
   }
 
   private async trySearchButtonFallbackClick(tabId: string, originalSelector: string) {
@@ -282,25 +400,12 @@ export class BrowserController {
   }
 
   private async tryVacancyCardFallbackClick(tabId: string, originalSelector: string) {
-    const candidates = [
-      "a[data-qa='serp-item__title']",
-      "a[data-qa='vacancy-serp__vacancy-title']",
-      "[data-qa='vacancy-title'] a",
-      "a[href*='/vacancy/']",
-    ];
+    const candidates = this.getVacancyTitleCandidates();
     return await this.tryClickCandidates(tabId, originalSelector, candidates);
   }
 
   private async tryResponseButtonFallbackClick(tabId: string, originalSelector: string) {
-    const candidates = [
-      "a[data-qa='vacancy-response-link']",
-      "a[data-qa='vacancy-response-link-top']",
-      "button[data-qa='vacancy-response-link-top']",
-      "button[data-qa*='vacancy-response']",
-      "a[href*='response']",
-      "button[aria-label*='Отклик']",
-      "a[aria-label*='Отклик']",
-    ];
+    const candidates = this.getResponseSelectorCandidates();
     return await this.tryClickCandidates(tabId, originalSelector, candidates);
   }
 
@@ -320,12 +425,7 @@ export class BrowserController {
   }
 
   private async tryVacancyExtractFallback(tabId: string, originalSelector: string) {
-    const candidates = [
-      "a[data-qa='serp-item__title']",
-      "a[data-qa='vacancy-serp__vacancy-title']",
-      "[data-qa='vacancy-title'] a",
-      "a[href*='/vacancy/']",
-    ];
+    const candidates = this.getVacancyTitleCandidates();
     for (const selector of candidates) {
       if (selector === originalSelector) continue;
       this.logger(`[MCP] extract fallback selector=${selector}`);
@@ -353,6 +453,76 @@ export class BrowserController {
       timeout: 30_000,
     });
     return this.assertToolSuccess('navigate', res);
+  }
+
+  private async tryNavigateToVacancyBySelector(tabId: string, selectorHint: string) {
+    const candidates = Array.from(new Set([selectorHint, ...this.getVacancyTitleCandidates()]));
+    for (const selector of candidates) {
+      this.logger(`[MCP] vacancy href fallback selector=${selector}`);
+      try {
+        const domRaw = await this.mcp.callTool('dom', { tabId, selector });
+        const dom = this.assertToolSuccess('dom', domRaw);
+        const html = normalizeDomResult(dom);
+        const href = this.extractFirstHrefFromHtml(html);
+        if (!href) continue;
+
+        const url = this.toAbsoluteUrl(href);
+        if (!this.isVacancyUrl(url)) continue;
+
+        this.logger(`[MCP] vacancy href fallback navigate url=${url}`);
+        const navRaw = await this.mcp.callTool('navigate', {
+          tabId,
+          url,
+          timeout: 30_000,
+        });
+        return this.assertToolSuccess('navigate', navRaw);
+      } catch {
+        // continue
+      }
+    }
+    return null;
+  }
+
+  private extractFirstHrefFromHtml(html: string) {
+    if (!html) return null;
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const href = doc.querySelector('a[href]')?.getAttribute('href');
+      if (href) return href;
+    } catch {
+      // ignore
+    }
+    const match = html.match(/href=['"]([^'"]+)['"]/i);
+    return match?.[1] ?? null;
+  }
+
+  private toAbsoluteUrl(href: string) {
+    try {
+      const base = this.lastKnownUrl ?? this.resolveHhOrigin();
+      return new URL(href, base).toString();
+    } catch {
+      return href;
+    }
+  }
+
+  private getVacancyTitleCandidates() {
+    return [
+      "a[data-qa='serp-item__title']",
+      "a[data-qa='vacancy-serp__vacancy-title']",
+      "[data-qa='vacancy-title'] a",
+      "a[href*='/vacancy/']",
+    ];
+  }
+
+  private getResponseSelectorCandidates() {
+    return [
+      "button[data-qa='vacancy-response-button']",
+      "a[data-qa='vacancy-response-link']",
+      "a[data-qa='vacancy-response-link-top']",
+      "button[data-qa='vacancy-response-link-top']",
+      "button[data-qa*='vacancy-response']",
+      "a[href*='response']",
+    ];
   }
 
   private resolveHhOrigin() {

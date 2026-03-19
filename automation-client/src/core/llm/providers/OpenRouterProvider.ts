@@ -111,31 +111,57 @@ export class OpenRouterProvider implements LLMProvider {
     let lastErr: OpenRouterProviderError | null = null;
 
     for (const model of modelsToTry) {
-      let res: Response;
-      try {
-        res = await fetch(`${this.baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: this.buildHeaders(true),
-          body: JSON.stringify({
-            model,
-            messages: request.messages.map((m) => ({ role: m.role, content: m.content })),
-            temperature: request.temperature ?? 0.2,
-            max_tokens: request.maxTokens ?? 1024,
-            reasoning: {
-              effort: this.reasoningEffort,
-              exclude: this.reasoningExclude,
-            },
-          }),
-        });
-      } catch (e) {
-        throw new OpenRouterProviderError(
-          `OpenRouter network error: ${(e as any)?.message ?? String(e)}`,
-          'network',
-          { attemptedModel: model },
-        );
+      let res: Response | null = null;
+      let text = '';
+      let maxTokens = Math.max(64, request.maxTokens ?? 320);
+
+      for (let budgetAttempt = 0; budgetAttempt < 3; budgetAttempt++) {
+        try {
+          res = await fetch(`${this.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: this.buildHeaders(true),
+            body: JSON.stringify({
+              model,
+              messages: request.messages.map((m) => ({ role: m.role, content: m.content })),
+              temperature: request.temperature ?? 0.2,
+              max_tokens: maxTokens,
+              reasoning: {
+                effort: this.reasoningEffort,
+                exclude: this.reasoningExclude,
+              },
+            }),
+          });
+        } catch (e) {
+          throw new OpenRouterProviderError(
+            `OpenRouter network error: ${(e as any)?.message ?? String(e)}`,
+            'network',
+            { attemptedModel: model },
+          );
+        }
+
+        text = await res.text();
+        if (res.ok) break;
+
+        // Soft budget adaptation for low-balance accounts.
+        // Example message: "You requested up to 900 tokens, but can only afford 194."
+        if (res.status === 402) {
+          const affordable = this.parseAffordableTokens(text);
+          if (affordable !== null) {
+            const nextBudget = Math.max(48, Math.min(maxTokens - 1, affordable - 24));
+            if (nextBudget < maxTokens) {
+              maxTokens = nextBudget;
+              continue;
+            }
+          }
+        }
+        break;
       }
 
-      const text = await res.text();
+      if (!res) {
+        throw new OpenRouterProviderError('OpenRouter request failed: empty response object', 'api', {
+          attemptedModel: model,
+        });
+      }
 
       if (!res.ok) {
         const lower = text.toLowerCase();
@@ -250,6 +276,14 @@ export class OpenRouterProvider implements LLMProvider {
       if (!ordered.includes(model)) ordered.push(model);
     }
     return ordered;
+  }
+
+  private parseAffordableTokens(errorBody: string): number | null {
+    const m = errorBody.match(/can only afford\s+(\d+)/i);
+    if (!m) return null;
+    const parsed = Number(m[1]);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return Math.floor(parsed);
   }
 
   private buildHeaders(includeContentType: boolean): Record<string, string> {
