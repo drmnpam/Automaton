@@ -41,6 +41,8 @@ export class OpenRouterProvider implements LLMProvider {
   private readonly budgetCooldownMs: number;
   private readonly emptyContentCooldownMs: number;
   private readonly modelBlockedUntil = new Map<string, number>();
+  private readonly lowBudgetModeMs: number;
+  private lowBudgetModeUntil = 0;
 
   constructor(
     private apiKey: string,
@@ -78,6 +80,7 @@ export class OpenRouterProvider implements LLMProvider {
       (envExclude === undefined ? true : envExclude === '1' || envExclude === 'true');
     this.budgetCooldownMs = 10 * 60 * 1000;
     this.emptyContentCooldownMs = 3 * 60 * 1000;
+    this.lowBudgetModeMs = 15 * 60 * 1000;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -201,6 +204,7 @@ export class OpenRouterProvider implements LLMProvider {
         }
 
         if (res.status === 402 && this.isBudgetError(lower)) {
+          this.enterLowBudgetMode();
           this.markModelTemporarilyBlocked(model, this.budgetCooldownMs);
           lastErr = new OpenRouterProviderError(
             `OpenRouter budget insufficient for model ${model}.`,
@@ -285,11 +289,24 @@ export class OpenRouterProvider implements LLMProvider {
       requested && requested !== 'auto' ? requested : undefined;
 
     const now = Date.now();
+    const lowBudgetModeActive = now < this.lowBudgetModeUntil;
+    const augmentedPool = this.augmentWithBuiltInFreeModels(configured);
+    const budgetAwarePool = lowBudgetModeActive
+      ? this.filterFreeSafeModels(augmentedPool)
+      : augmentedPool;
     const eligibleConfigured = configured.filter((model) => {
       const blockedUntil = this.modelBlockedUntil.get(model) ?? 0;
       return blockedUntil <= now;
     });
-    const basePool = eligibleConfigured.length ? eligibleConfigured : configured;
+    const eligibleBudgetAware = budgetAwarePool.filter((model) => {
+      const blockedUntil = this.modelBlockedUntil.get(model) ?? 0;
+      return blockedUntil <= now;
+    });
+    const basePool = lowBudgetModeActive
+      ? (eligibleBudgetAware.length ? eligibleBudgetAware : budgetAwarePool)
+      : (eligibleBudgetAware.length
+        ? eligibleBudgetAware
+        : (eligibleConfigured.length ? eligibleConfigured : budgetAwarePool));
     const prioritized = this.prioritizeModels(basePool);
 
     const ordered: string[] = [];
@@ -326,13 +343,38 @@ export class OpenRouterProvider implements LLMProvider {
   private modelRank(model: string): number {
     const m = model.toLowerCase();
     if (m.endsWith(':free')) return 0;
-    if (m === 'openrouter/auto') return 50;
+    if (m === 'openrouter/auto') return 80;
     if (m.includes('gpt-4o-mini')) return 70;
     return 20;
   }
 
   private markModelTemporarilyBlocked(model: string, cooldownMs: number) {
     this.modelBlockedUntil.set(model, Date.now() + cooldownMs);
+  }
+
+  private enterLowBudgetMode() {
+    this.lowBudgetModeUntil = Date.now() + this.lowBudgetModeMs;
+  }
+
+  private filterFreeSafeModels(models: string[]): string[] {
+    return models.filter((model) => {
+      const m = model.toLowerCase();
+      if (m === 'openrouter/auto') return false;
+      return m.endsWith(':free');
+    });
+  }
+
+  private augmentWithBuiltInFreeModels(models: string[]): string[] {
+    const fallbackFree = [
+      'stepfun/step-3.5-flash:free',
+      'deepseek/deepseek-chat-v3.1:free',
+      'qwen/qwen3-coder:free',
+    ];
+    const merged = [...models];
+    for (const candidate of fallbackFree) {
+      if (!merged.includes(candidate)) merged.push(candidate);
+    }
+    return merged;
   }
 
   private buildHeaders(includeContentType: boolean): Record<string, string> {
