@@ -1,0 +1,156 @@
+import { LLMProvider } from '../LLMProvider';
+import { LLMRequest, LLMResponse } from '../types';
+
+type ErrorKind = 'network' | 'model' | 'api' | 'unavailable';
+
+class OpenAIProviderError extends Error {
+  kind: ErrorKind;
+  status?: number;
+  attemptedModel?: string;
+
+  constructor(
+    message: string,
+    kind: ErrorKind,
+    opts?: { status?: number; attemptedModel?: string },
+  ) {
+    super(message);
+    this.name = 'OpenAIProviderError';
+    this.kind = kind;
+    this.status = opts?.status;
+    this.attemptedModel = opts?.attemptedModel;
+  }
+}
+
+export class OpenAIProvider implements LLMProvider {
+  name = 'openai';
+  private readonly baseUrl: string;
+  private readonly availableModels: string[];
+
+  constructor(
+    private apiKey: string,
+    config?: { baseUrl?: string; availableModels?: string[] },
+  ) {
+    const envModels = import.meta.env.VITE_OPENAI_MODELS as string | undefined;
+    this.baseUrl = config?.baseUrl ?? 'https://api.openai.com/v1';
+    this.availableModels =
+      config?.availableModels ??
+      (envModels
+        ? envModels.split(',').map((s) => s.trim()).filter(Boolean)
+        : ['gpt-4o-mini']);
+  }
+
+  async isAvailable(): Promise<boolean> {
+    if (this.apiKey.trim().length === 0) return false;
+    // Quick key validation: OpenAI supports GET /models.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    try {
+      const res = await fetch(`${this.baseUrl}/models`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        signal: controller.signal,
+      });
+      return res.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async getAvailableModels(): Promise<string[]> {
+    return this.availableModels;
+  }
+
+  async generate(request: LLMRequest): Promise<LLMResponse> {
+    if (!this.apiKey) throw new OpenAIProviderError('OpenAI API key is empty', 'api');
+
+    const requestedModel = request.model;
+    const model =
+      requestedModel && this.availableModels.includes(requestedModel)
+        ? requestedModel
+        : this.availableModels[0];
+
+    if (!model) throw new OpenAIProviderError('No OpenAI models configured', 'unavailable');
+
+    const body = {
+      model,
+      messages: request.messages.map((m) => ({ role: m.role, content: m.content })),
+      temperature: request.temperature ?? 0.2,
+      max_tokens: request.maxTokens ?? 1024,
+    };
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      throw new OpenAIProviderError(
+        `OpenAI network error: ${(e as any)?.message ?? String(e)}`,
+        'network',
+      );
+    }
+
+    const text = await res.text();
+
+    if (!res.ok) {
+      const lower = text.toLowerCase();
+      if (res.status === 401 || res.status === 403) {
+        throw new OpenAIProviderError(
+          `OpenAI unauthorized (HTTP ${res.status}).`,
+          'api',
+          { status: res.status, attemptedModel: model },
+        );
+      }
+      if (res.status === 404 || lower.includes('not found')) {
+        throw new OpenAIProviderError(
+          `OpenAI model not found: ${model}.`,
+          'model',
+          { status: res.status, attemptedModel: model },
+        );
+      }
+      throw new OpenAIProviderError(
+        `OpenAI API error (HTTP ${res.status}): ${text}`,
+        'api',
+        { status: res.status, attemptedModel: model },
+      );
+    }
+
+    let json: any;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new OpenAIProviderError(
+        'Invalid OpenAI response JSON',
+        'api',
+        { attemptedModel: model },
+      );
+    }
+
+    const content = json?.choices?.[0]?.message?.content ?? '';
+
+    if (!content || typeof content !== 'string') {
+      throw new OpenAIProviderError(
+        'OpenAI returned empty content',
+        'api',
+        { attemptedModel: model },
+      );
+    }
+
+    return {
+      provider: this.name,
+      model,
+      content,
+      raw: json,
+    };
+  }
+}
+

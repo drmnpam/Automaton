@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+automation-client/node_modules/
+
+# Build outputs
+dist/
+automation-client/dist/
+
+# Env and secrets
+.env
+.env.local
+.env.*.local
+automation-client/.env.local
+
+# IDE
+.idea/
+.vscode/
+.vs/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+automation-client/*.log
+automation-client/*.err.log
+automation_archive_*/
+
+# SQLite
+*.db
+*.sqlite

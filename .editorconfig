@@ -1,0 +1,29 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+max_line_length = 120
+indent_style = space
+indent_size = 4
+
+[*.py]
+indent_style = space
+indent_size = 4
+max_line_length = 120
+quote_type = single
+python_version = 3.10
+
+[*.cs]
+indent_style = space
+indent_size = 4
+dotnet_sort_system_directives_first = true
+csharp_style_var_elsewhere = true:suggestion
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.yml]
+indent_size = 2

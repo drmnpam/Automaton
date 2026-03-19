@@ -1,0 +1,226 @@
+import { LLMManager } from '../llm/LLMManager';
+import { BrowserAction } from '../execution/ActionTypes';
+import { extractFirstJsonObject } from '../utils/json';
+import { ToolCall, toolCallSchema } from './toolCallSchema';
+
+export class TaskPlanner {
+  constructor(
+    private llm: LLMManager,
+    private model: string,
+  ) {}
+
+  async parseUserIntent(taskText: string): Promise<string> {
+    // MVP: пока используем задачу как есть.
+    return taskText;
+  }
+
+  private readonly TOOL_SYSTEM_PROMPT = `Ты — агент автоматизации браузера через MCP/Kapture.
+
+Ты вызываешь ИМЕННО ОДНУ следующую операцию за раз (tool call).
+
+ТВОЯ ЗАДАЧА:
+- по задаче пользователя и текущему контексту выбрать следующий tool call
+- либо завершить работу (status="done")
+
+ВАЖНО:
+- Верни ТОЛЬКО валидный JSON-ОБЪЕКТ (без markdown, без комментариев, без текста вокруг).
+- Никаких массивов.
+- Не используй обертки "tool_code", "tool_call", "next_action" или вложенный объект "action".
+- Поле "action" должно быть строкой из: open_url | click | type | wait | extract | screenshot.
+
+TOOLS (allowed actions):
+- open_url: { action:"open_url", value:"https://...", description:"..." }
+- click: { action:"click", selector:"#login", description:"..." }
+- type: { action:"type", selector:"#email", value:"text", description:"..." }
+- wait: { action:"wait", waitMs: 1000, description:"..." }
+- extract: { action:"extract", selector:".item", extractStrategy:"inner_text", description:"..." }
+- screenshot: { action:"screenshot", description:"..." }
+
+Обязательные поля:
+- status: "continue" или "done"
+- description: непустая строка
+
+Если status="done":
+- finalResult: строка (что удалось получить/сделать)
+`;
+
+  async generateNextToolCall(params: {
+    taskText: string;
+    actionsSoFar: BrowserAction[];
+    lastObservation: any;
+    lastErrorMessage: string | null;
+    stepIndex: number;
+    maxSteps: number;
+  }): Promise<ToolCall> {
+    const intent = await this.parseUserIntent(params.taskText);
+
+    const response = await this.llm.generate({
+      model: this.model,
+      temperature: 0.2,
+      maxTokens: 900,
+      messages: [
+        { role: 'system', content: this.TOOL_SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content: `TASK:\n${intent}\n\n` +
+            `ACTIONS_SO_FAR (executed so far):\n${JSON.stringify(params.actionsSoFar, null, 2)}\n\n` +
+            `LAST_OBSERVATION (result from MCP for the last step; may be large):\n${this.safeStringify(params.lastObservation)}\n\n` +
+            `LAST_ERROR (if previous MCP/action failed):\n${params.lastErrorMessage ? params.lastErrorMessage : 'none'}\n\n` +
+            `Now choose the NEXT tool call. You must return JSON with either status="continue" or status="done".\n` +
+            `If the goal is already sufficiently achieved, or further automation is blocked by auth/captcha/permissions/uncertain selectors, return status="done" with finalResult.\n` +
+            `stepIndex=${params.stepIndex} maxSteps=${params.maxSteps}`,
+        },
+      ],
+    });
+
+    return this.parseToolCallOrThrow(response.content, 'generateNextToolCall');
+  }
+
+  async selfCorrectToolCall(params: {
+    taskText: string;
+    actionsSoFar: BrowserAction[];
+    lastObservation: any;
+    lastErrorMessage: string | null;
+    stepIndex: number;
+    maxSteps: number;
+    rawModelOutput: string;
+    parseErrorMessage: string;
+  }): Promise<ToolCall> {
+    const intent = await this.parseUserIntent(params.taskText);
+
+    const response = await this.llm.generate({
+      model: this.model,
+      temperature: 0.2,
+      maxTokens: 900,
+      messages: [
+        {
+          role: 'system',
+          content: this.TOOL_SYSTEM_PROMPT,
+        },
+        {
+          role: 'user',
+          content:
+            `You returned invalid JSON for the tool call.\n` +
+            `TASK:\n${intent}\n\n` +
+            `ACTIONS_SO_FAR:\n${JSON.stringify(params.actionsSoFar, null, 2)}\n\n` +
+            `LAST_OBSERVATION:\n${this.safeStringify(params.lastObservation)}\n\n` +
+            `LAST_ERROR:\n${params.lastErrorMessage ? params.lastErrorMessage : 'none'}\n\n` +
+            `INVALID_OUTPUT:\n${params.rawModelOutput}\n\n` +
+            `PARSE_ERROR:\n${params.parseErrorMessage}\n\n` +
+            `Return ONLY a corrected JSON object that matches the schema.`,
+        },
+      ],
+    });
+
+    return this.parseToolCallOrThrow(response.content, 'selfCorrectToolCall');
+  }
+
+  private safeStringify(v: any) {
+    try {
+      const s = typeof v === 'string' ? v : JSON.stringify(v);
+      return s.length > 4000 ? `${s.slice(0, 4000)}...` : s;
+    } catch {
+      return String(v);
+    }
+  }
+
+  private parseToolCallOrThrow(raw: string, origin: string): ToolCall {
+    try {
+      const obj = extractFirstJsonObject(raw);
+      const normalized = this.normalizeToolCallShape(obj);
+      return toolCallSchema.parse(normalized);
+    } catch (e) {
+      const err = e as Error;
+      const parseErrorMessage = `${origin}: invalid tool call JSON: ${err.message}`;
+      (err as any).rawModelOutput = raw;
+      throw err;
+    }
+  }
+
+  private normalizeToolCallShape(obj: any): any {
+    if (!obj || typeof obj !== 'object') return obj;
+
+    const unwrapKeys = ['tool_code', 'tool_call', 'next_action', 'nextAction', 'step', 'operation'];
+    for (const key of unwrapKeys) {
+      if (obj[key] && typeof obj[key] === 'object' && !Array.isArray(obj[key])) {
+        obj = {
+          ...obj,
+          ...obj[key],
+        };
+      }
+    }
+
+    // Some models wrap action payload into nested shape:
+    // { status:"continue", description:"...", action: { action:"open_url", value:"..." } }
+    if (
+      obj.action &&
+      typeof obj.action === 'object' &&
+      !Array.isArray(obj.action)
+    ) {
+      const nested = obj.action;
+      obj = {
+        ...obj,
+        ...nested,
+        action: nested.action ?? obj.action,
+        description: obj.description ?? nested.description ?? '',
+      };
+    }
+
+    if (typeof obj.action === 'string') {
+      obj.action = this.normalizeActionName(obj.action);
+    }
+
+    // If model returned done without description, synthesize it from finalResult.
+    if (obj.status === 'done') {
+      if (!obj.description || typeof obj.description !== 'string' || obj.description.trim().length === 0) {
+        const fallbackDesc =
+          typeof obj.finalResult === 'string' && obj.finalResult.trim().length > 0
+            ? obj.finalResult
+            : 'Task finished';
+        obj = {
+          ...obj,
+          description: fallbackDesc,
+        };
+      }
+      return obj;
+    }
+
+    // If model omitted/blank/unknown status but returned action payload, default to continue.
+    if (
+      (!obj.status || (obj.status !== 'continue' && obj.status !== 'done')) &&
+      (typeof obj.action === 'string' || (obj.action && typeof obj.action === 'object'))
+    ) {
+      obj = {
+        ...obj,
+        status: 'continue',
+      };
+    }
+
+    return obj;
+  }
+
+  private normalizeActionName(action: string): string {
+    const normalized = action.trim().toLowerCase();
+    const map: Record<string, string> = {
+      open: 'open_url',
+      openurl: 'open_url',
+      navigate: 'open_url',
+      goto: 'open_url',
+      input: 'type',
+      fill: 'type',
+      type_text: 'type',
+      write: 'type',
+      delay: 'wait',
+      sleep: 'wait',
+      wait_for: 'wait',
+      read: 'extract',
+      scrape: 'extract',
+      snapshot: 'screenshot',
+      screen: 'screenshot',
+      capture: 'screenshot',
+    };
+
+    return map[normalized] ?? normalized;
+  }
+}
+
