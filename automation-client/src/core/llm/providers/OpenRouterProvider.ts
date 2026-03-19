@@ -38,6 +38,8 @@ export class OpenRouterProvider implements LLMProvider {
   private readonly appTitle?: string;
   private readonly reasoningEffort: 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
   private readonly reasoningExclude: boolean;
+  private readonly budgetCooldownMs: number;
+  private readonly budgetBlockedUntil = new Map<string, number>();
 
   constructor(
     private apiKey: string,
@@ -73,6 +75,7 @@ export class OpenRouterProvider implements LLMProvider {
     this.reasoningExclude =
       config?.reasoningExclude ??
       (envExclude === undefined ? true : envExclude === '1' || envExclude === 'true');
+    this.budgetCooldownMs = 10 * 60 * 1000;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -196,6 +199,7 @@ export class OpenRouterProvider implements LLMProvider {
         }
 
         if (res.status === 402 && this.isBudgetError(lower)) {
+          this.markModelBudgetBlocked(model);
           lastErr = new OpenRouterProviderError(
             `OpenRouter budget insufficient for model ${model}.`,
             'unavailable',
@@ -267,21 +271,29 @@ export class OpenRouterProvider implements LLMProvider {
   }
 
   private resolveModelsToTry(requestedModel?: string): string[] {
-    const uniqueConfigured = Array.from(
+    const configured = Array.from(
       new Set(this.availableModels.map((s) => s.trim()).filter(Boolean)),
     );
-    if (!uniqueConfigured.length) return [];
+    if (!configured.length) return [];
 
     const requested = requestedModel?.trim();
     // "auto" (from planner/UI default) means "use configured priority order".
     const normalizedRequested =
       requested && requested !== 'auto' ? requested : undefined;
 
+    const now = Date.now();
+    const eligibleConfigured = configured.filter((model) => {
+      const blockedUntil = this.budgetBlockedUntil.get(model) ?? 0;
+      return blockedUntil <= now;
+    });
+    const basePool = eligibleConfigured.length ? eligibleConfigured : configured;
+    const prioritized = this.prioritizeModels(basePool);
+
     const ordered: string[] = [];
-    if (normalizedRequested && uniqueConfigured.includes(normalizedRequested)) {
+    if (normalizedRequested && prioritized.includes(normalizedRequested)) {
       ordered.push(normalizedRequested);
     }
-    for (const model of uniqueConfigured) {
+    for (const model of prioritized) {
       if (!ordered.includes(model)) ordered.push(model);
     }
     return ordered;
@@ -302,6 +314,22 @@ export class OpenRouterProvider implements LLMProvider {
       lowerBody.includes('fewer max_tokens') ||
       lowerBody.includes('prompt tokens limit exceeded')
     );
+  }
+
+  private prioritizeModels(models: string[]): string[] {
+    return [...models].sort((a, b) => this.modelRank(a) - this.modelRank(b));
+  }
+
+  private modelRank(model: string): number {
+    const m = model.toLowerCase();
+    if (m.endsWith(':free')) return 0;
+    if (m === 'openrouter/auto') return 50;
+    if (m.includes('gpt-4o-mini')) return 70;
+    return 20;
+  }
+
+  private markModelBudgetBlocked(model: string) {
+    this.budgetBlockedUntil.set(model, Date.now() + this.budgetCooldownMs);
   }
 
   private buildHeaders(includeContentType: boolean): Record<string, string> {
