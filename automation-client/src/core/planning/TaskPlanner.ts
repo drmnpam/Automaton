@@ -14,38 +14,66 @@ export class TaskPlanner {
     return taskText;
   }
 
-  private readonly TOOL_SYSTEM_PROMPT = `You are a browser automation agent using MCP/Kapture.
+  private readonly TOOL_SYSTEM_PROMPT = `You are a browser automation agent using MCP/Kapture for universal cross-site interaction.
 
 Return exactly ONE valid JSON object and nothing else.
 
-Rules:
-- No markdown.
-- No arrays.
-- No wrapper fields like "tool_code", "tool_call", "next_action".
-- Field "action" must be one of: open_url | click | type | wait | extract | screenshot | press_key | scroll | drag_drop | copy | paste | mcp_tool.
-- "status" is required: "continue" or "done".
-- "description" is required and must be a non-empty string.
-- For status="done", include "finalResult" with concrete findings and user-visible outcome.
-- Do not repeat the same failing selector or identical action payload.
-- If a selector is uncertain, prefer extract with selector "body" and extractStrategy "inner_text".
-- extractStrategy can only be: inner_text | html | attribute.
-- Use mcp_tool only for advanced interaction when standard actions are insufficient.
+CRITICAL RULES FOR UNIVERSAL SELECTORS:
+1. **Always prefer universal selectors over site-specific ones**:
+   - Priority 1: [data-qa*="keyword"] or [data-qa="exact"]
+   - Priority 2: [aria-label*="keyword"]
+   - Priority 3: [data-testid*="keyword"]
+   - Priority 4: [role="button"][class*="keyword"] or [role="group"]
+   - Priority 5: Simple type selectors: input[type="text"], button[type="submit"]
+   - AVOID: #specific-id, nth-child patterns, complex CSS paths, site-specific class names
 
-Action shapes:
-- open_url: { "status":"continue", "action":"open_url", "value":"https://...", "description":"..." }
-- click: { "status":"continue", "action":"click", "selector":"...", "description":"..." }
-- type: { "status":"continue", "action":"type", "selector":"...", "value":"...", "description":"..." }
-- wait: { "status":"continue", "action":"wait", "waitMs":1000, "description":"..." }
-- extract: { "status":"continue", "action":"extract", "selector":"body", "extractStrategy":"inner_text", "description":"..." }
-- screenshot: { "status":"continue", "action":"screenshot", "description":"..." }
-- press_key: { "status":"continue", "action":"press_key", "key":"Enter", "description":"..." }
-- scroll: { "status":"continue", "action":"scroll", "direction":"down", "deltaY":700, "description":"..." }
-- drag_drop: { "status":"continue", "action":"drag_drop", "sourceSelector":"...", "targetSelector":"...", "description":"..." }
-- copy: { "status":"continue", "action":"copy", "selector":"...", "description":"..." }
-- paste: { "status":"continue", "action":"paste", "selector":"...", "value":"...", "description":"..." }
-- mcp_tool: { "status":"continue", "action":"mcp_tool", "toolName":"...", "toolArgs":{}, "description":"..." }
+2. **Escape loops - detect when stuck**:
+   - If same selector fails 2+ times → STOP and use extract instead
+   - If repeating identical actions → Change strategy: try different selector or extract
+   - Do NOT persist with failing selectors - pivot to information gathering
 
-Use status="done" only when enough information is gathered or a user-visible result is completed.`;
+3. **When uncertain about page structure**:
+   - Use: extract action with selector="body" and extractStrategy="inner_text"
+   - This helps you understand TRUE page structure before attempting clicks/typing
+   - Never guess selectors - extract first if unsure
+
+4. **Adaptive selector fallback**:
+   - Start with most likely universal selector
+   - If it fails, system will try fallbacks automatically
+   - Your job: choose wisest PRIMARY selector, let MCP handle variations
+
+CORE RULES:
+- Return exactly ONE valid JSON object, no markdown
+- No wrapper fields: use direct schema only
+- "action" options: open_url | click | type | wait | extract | screenshot | press_key | scroll | drag_drop | copy | paste | mcp_tool
+- "status": "continue" or "done" (required)
+- "description": non-empty string (required)
+- For "done": include "finalResult" with concrete outcome
+- extractStrategy: "inner_text" | "html" | "attribute" only
+
+ACTION SHAPES:
+- open_url: {"status":"continue","action":"open_url","value":"https://...","description":"..."}
+- click: {"status":"continue","action":"click","selector":"[data-qa*=\"keyword\"]","description":"..."}
+- type: {"status":"continue","action":"type","selector":"input[type=\"text\"]","value":"...","description":"..."}
+- extract: {"status":"continue","action":"extract","selector":"body","extractStrategy":"inner_text","description":"..."}
+- wait: {"status":"continue","action":"wait","waitMs":1000,"description":"..."}
+- screenshot: {"status":"continue","action":"screenshot","description":"..."}
+- press_key: {"status":"continue","action":"press_key","key":"Enter","description":"..."}
+- scroll: {"status":"continue","action":"scroll","direction":"down","deltaY":700,"description":"..."}
+
+SELECTOR EXAMPLES (GOOD):
+✓ [data-qa*="search-button"]
+✓ [aria-label*="submit"]
+✓ input[type="text"]
+✓ button[role="button"]
+✓ [data-testid*="form"]
+
+SELECTOR EXAMPLES (BAD - NEVER USE):
+✗ #vaccine-form > div:nth-child(2) > input
+✗ div.modal-xyz-123 > button.special-class
+✗ [id="specificPageId"]
+
+Use status="done" when task is complete or blocked after genuine attempt.`;
 
   async generateNextToolCall(params: {
     taskText: string;
@@ -56,13 +84,15 @@ Use status="done" only when enough information is gathered or a user-visible res
     maxSteps: number;
   }): Promise<ToolCall> {
     const intent = await this.parseUserIntent(params.taskText);
+    const loopDetection = this.detectLoopedActions(params.actionsSoFar);
     const fullUserPrompt =
       `TASK:\n${intent}\n\n` +
       `ACTIONS_TAIL:\n${this.actionsTail(params.actionsSoFar, 8)}\n\n` +
       `LAST_OBSERVATION_SUMMARY:\n${this.summarizeObservation(params.lastObservation)}\n\n` +
       `LAST_ERROR:\n${params.lastErrorMessage ? params.lastErrorMessage : 'none'}\n\n` +
+      (loopDetection.isLooped ? `⚠️ WARNING: You are in a LOOP - selector "${loopDetection.failedSelector}" has failed ${loopDetection.count} times.\nIMEDIATELY switch strategy: try different selector OR use extract to understand page structure.\n\n` : '') +
       `Now choose NEXT tool call. Return only one JSON object.\n` +
-      `Avoid repeated failing selectors.\n` +
+      `${loopDetection.isLooped ? '🔄 BREAK THE LOOP: Use extract with body selector or choose a completely different selector.\n' : 'Avoid repeated failing selectors.\n'}` +
       `If blocked or objective achieved, return status="done" with finalResult describing exactly what was achieved.\n` +
       `stepIndex=${params.stepIndex} maxSteps=${params.maxSteps}`;
 
@@ -91,6 +121,7 @@ Use status="done" only when enough information is gathered or a user-visible res
               `TASK:\n${intent}\n` +
               `stepIndex=${params.stepIndex} maxSteps=${params.maxSteps}\n` +
               `LAST_ERROR:\n${params.lastErrorMessage ? params.lastErrorMessage : 'none'}\n` +
+              (loopDetection.isLooped ? `LOOP WARNING: Selector "${loopDetection.failedSelector}" failed ${loopDetection.count}x. Change selector or use extract.\n` : '') +
               `LAST_ACTIONS_TAIL:\n${this.actionsTail(params.actionsSoFar, 5)}\n` +
               `LAST_OBSERVATION_SHORT:\n${this.summarizeObservation(params.lastObservation, 420)}\n` +
               `Return ONLY one valid JSON object.`,
@@ -113,15 +144,17 @@ Use status="done" only when enough information is gathered or a user-visible res
     parseErrorMessage: string;
   }): Promise<ToolCall> {
     const intent = await this.parseUserIntent(params.taskText);
+    const loopDetection = this.detectLoopedActions(params.actionsSoFar);
     const fullUserPrompt =
       `You returned invalid JSON for the tool call.\n` +
       `TASK:\n${intent}\n\n` +
       `ACTIONS_TAIL:\n${this.actionsTail(params.actionsSoFar, 6)}\n\n` +
       `LAST_OBSERVATION_SUMMARY:\n${this.summarizeObservation(params.lastObservation)}\n\n` +
       `LAST_ERROR:\n${params.lastErrorMessage ? params.lastErrorMessage : 'none'}\n\n` +
+      (loopDetection.isLooped ? `⚠️ LOOP DETECTED: Selector "${loopDetection.failedSelector}" failed ${loopDetection.count} times. Use extract or change selector.\n\n` : '') +
       `INVALID_OUTPUT:\n${this.safeStringify(params.rawModelOutput, 700)}\n\n` +
       `PARSE_ERROR:\n${params.parseErrorMessage}\n\n` +
-      `Return ONLY corrected JSON object that matches schema.`;
+      `Return ONLY corrected JSON object that matches schema. ${loopDetection.isLooped ? 'Break the loop!' : ''}`;
 
     let response;
     try {
@@ -154,6 +187,7 @@ Use status="done" only when enough information is gathered or a user-visible res
               `Invalid JSON. Return corrected JSON object only.\n` +
               `TASK:\n${intent}\n` +
               `LAST_ERROR:${params.lastErrorMessage ? params.lastErrorMessage : 'none'}\n` +
+              (loopDetection.isLooped ? `LOOP: "${loopDetection.failedSelector}" failed ${loopDetection.count}x - use extract or new selector.\n` : '') +
               `PARSE_ERROR:${params.parseErrorMessage}\n` +
               `INVALID_OUTPUT_SHORT:\n${this.safeStringify(params.rawModelOutput, 300)}`,
           },
@@ -207,6 +241,28 @@ Use status="done" only when enough information is gathered or a user-visible res
     const compact = value.replace(/\s+/g, ' ').trim();
     if (compact.length <= max) return compact;
     return `${compact.slice(0, max)}...`;
+  }
+
+  private detectLoopedActions(actions: BrowserAction[]): { isLooped: boolean; failedSelector?: string; count: number } {
+    if (actions.length < 3) return { isLooped: false, count: 0 };
+    
+    const recentActions = actions.slice(-5);
+    const selectorCounts = new Map<string, number>();
+    
+    for (const action of recentActions) {
+      if ((action.action === 'click' || action.action === 'type' || action.action === 'extract') && action.selector) {
+        const count = (selectorCounts.get(action.selector) ?? 0) + 1;
+        selectorCounts.set(action.selector, count);
+      }
+    }
+    
+    for (const [selector, count] of selectorCounts) {
+      if (count >= 3) {
+        return { isLooped: true, failedSelector: selector, count };
+      }
+    }
+    
+    return { isLooped: false, count: 0 };
   }
 
   private isPromptBudgetError(err: unknown): boolean {
