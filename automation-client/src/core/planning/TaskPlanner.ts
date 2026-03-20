@@ -27,6 +27,8 @@ export class TaskPlanner {
 - Никаких массивов.
 - Не используй обертки "tool_code", "tool_call", "next_action" или вложенный объект "action".
 - Поле "action" должно быть строкой из: open_url | click | type | wait | extract | screenshot.
+- НЕ повторяй одинаковый tool call (тот же action + selector/value) больше 2 раз подряд.
+- Если наблюдение не меняется, выбери ДРУГОЕ действие (например click/wait/open_url/screenshot) или верни status="done" с объяснением.
 
 TOOLS (allowed actions):
 - open_url: { action:"open_url", value:"https://...", description:"..." }

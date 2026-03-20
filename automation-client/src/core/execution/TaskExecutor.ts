@@ -63,6 +63,8 @@ export class TaskExecutor {
 
     let consecutiveMcpErrors = 0;
     let consecutivePlannerTempFailures = 0;
+    let lastExecutedSignature = '';
+    let repeatedExecutedSignatureCount = 0;
 
     this.state.setStatus('running');
     this.callbacks.onStatusChange('running');
@@ -209,6 +211,27 @@ export class TaskExecutor {
         lastErrorMessage = '';
         lastObservation = result;
 
+        const stepSig = this.buildStepSignature(step, result);
+        if (stepSig && stepSig === lastExecutedSignature) {
+          repeatedExecutedSignatureCount += 1;
+        } else {
+          lastExecutedSignature = stepSig;
+          repeatedExecutedSignatureCount = 1;
+        }
+
+        if (repeatedExecutedSignatureCount >= 3) {
+          lastErrorMessage =
+            `Loop detected: identical step repeated ${repeatedExecutedSignatureCount} times. ` +
+            `Choose a different action or finish with status="done".`;
+          lastObservation = {
+            loopDetected: true,
+            repeatedCount: repeatedExecutedSignatureCount,
+            repeatedStep: step,
+            latestResultPreview: this.summarize(result),
+          };
+          this.callbacks.onStepLog(`[PlannerHint] ${lastErrorMessage}`);
+        }
+
         // Append executed step to the plan.
         plan = [...plan, step];
         this.callbacks.onPlanChange(plan);
@@ -309,6 +332,14 @@ export class TaskExecutor {
     } catch {
       return '[unserializable result]';
     }
+  }
+
+  private buildStepSignature(step: BrowserAction, result: any): string {
+    const action = step.action;
+    const selector = (step as any).selector ?? '';
+    const value = (step as any).value ?? '';
+    const resultPreview = this.summarize(result);
+    return `${action}|${selector}|${value}|${resultPreview.slice(0, 180)}`;
   }
 
   private emitCheckpoint(checkpoint: TaskExecutionCheckpoint) {
