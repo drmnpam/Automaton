@@ -54,6 +54,7 @@ The app is focused on reliable step-by-step execution instead of brittle one-sho
 1. Configure environment:
    - copy `automation-client/.env.example` to `.env.local` if needed
    - set provider keys and MCP URL
+   - optional: set `KAPTURE_MCP_START_CMD` for launcher MCP auto-start
 2. Install and run:
    - `cd automation-client`
    - `npm install`
@@ -74,3 +75,4 @@ The app is focused on reliable step-by-step execution instead of brittle one-sho
 
 - If no tabs are connected in Kapture, execution will fail until the extension is attached.
 - If another debugger is already attached to the tab, screenshot/DOM tools may fail until that conflict is resolved.
+- `Run Automation Client.cmd` now tries to auto-start MCP if the configured MCP port is not listening.
