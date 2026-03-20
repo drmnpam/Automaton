@@ -76,6 +76,33 @@ export class TaskExecutor {
         `[Executor] continue from stepIndex=${stepStart} with existingPlan=${plan.length}`,
       );
     }
+
+    // Fail fast when MCP transport is not reachable, to avoid spending LLM tokens
+    // on actions that cannot execute anyway.
+    try {
+      await this.browser.ensureReady();
+      this.callbacks.onStepLog('[MCP] preflight ok');
+    } catch (e) {
+      const err = e as Error;
+      const fatal = `MCP preflight failed: ${err.message}`;
+      const finishedAt = Date.now();
+      const entry: TaskHistoryEntry = {
+        id: taskId,
+        startedAt,
+        finishedAt,
+        taskText,
+        provider: providerName,
+        plan,
+        resultSummary: 'error',
+        error: fatal,
+      };
+
+      this.state.setStatus('error');
+      this.callbacks.onStatusChange('error');
+      this.callbacks.onTaskDone(entry);
+      throw new Error(fatal);
+    }
+
     this.emitCheckpoint({
       taskText,
       providerName,
@@ -268,6 +295,25 @@ export class TaskExecutor {
           nextStepIndex: stepIndex + 1,
         });
 
+        if (this.isMcpInfrastructureError(lastErrorMessage)) {
+          const finishedAt = Date.now();
+          const entry: TaskHistoryEntry = {
+            id: taskId,
+            startedAt,
+            finishedAt,
+            taskText,
+            provider: providerName,
+            plan,
+            resultSummary: 'error',
+            error: lastErrorMessage,
+          };
+
+          this.state.setStatus('error');
+          this.callbacks.onStatusChange('error');
+          this.callbacks.onTaskDone(entry);
+          throw err;
+        }
+
         if (consecutiveMcpErrors >= this.maxConsecutiveMcpErrors) {
           const finishedAt = Date.now();
           const entry: TaskHistoryEntry = {
@@ -353,6 +399,17 @@ export class TaskExecutor {
       m.includes('no json object found') ||
       m.includes('invalid input') ||
       m.includes('zod')
+    );
+  }
+
+  private isMcpInfrastructureError(message: string) {
+    const m = message.toLowerCase();
+    return (
+      m.includes('websocket connection error') ||
+      m.includes('websocket closed') ||
+      m.includes('mcp request timeout') ||
+      m.includes('no tabs connected') ||
+      m.includes('debugger is already attached')
     );
   }
 

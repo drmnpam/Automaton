@@ -32,6 +32,10 @@ export class BrowserController {
     private readonly logger: (msg: string) => void,
   ) {}
 
+  async ensureReady() {
+    await this.ensureTabId();
+  }
+
   private async ensureTabId() {
     if (this.tabId) return;
     let tabs: any[] = [];
