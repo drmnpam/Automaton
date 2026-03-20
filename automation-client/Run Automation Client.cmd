@@ -5,5 +5,6 @@ set "PS_SCRIPT=%APP_DIR%scripts\start-automation-client.ps1"
 
 if not exist "%PS_SCRIPT%" exit /b 1
 
-powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%PS_SCRIPT%"
+REM Run PowerShell with better logging - NOT hidden so user can see startup status
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%"
 endlocal
