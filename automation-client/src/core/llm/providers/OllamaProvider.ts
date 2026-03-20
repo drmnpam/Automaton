@@ -32,8 +32,8 @@ export class OllamaProvider implements LLMProvider {
   }
 
   async generate(request: LLMRequest): Promise<LLMResponse> {
-
-    const model = request.model || this.defaultModel;
+    // Resolve 'auto' model to actual default model
+    const model = request.model && request.model !== 'auto' ? request.model : this.defaultModel;
 
     const system = request.messages
       .filter((m) => m.role === 'system')
