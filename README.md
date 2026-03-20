@@ -71,6 +71,16 @@ The app is focused on reliable step-by-step execution instead of brittle one-sho
 - https://github.com/jmorganca/ollama-nextjs
 - https://github.com/ollama/web-ui
 
+## Enhancements included
+
+Implemented improvements:
+- OllamaProxy + CORS handling, `VITE_OLLAMA_URL`
+- vitest tests + coverage + GitHub Actions (CI)
+- runtime provider status in UI (Ollama availability)
+- app logs + status management
+- `TaskExecutor`/LLMManager robustness extension (rich error classification)
+- README and scripts for local model startup
+
 ## Quick Start
 
 1. Configure environment:

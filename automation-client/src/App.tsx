@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import { GeminiProvider } from './core/llm/providers/GeminiProvider';
 import { LLMManager } from './core/llm/LLMManager';
@@ -32,6 +32,7 @@ export const App: React.FC = () => {
   const [finalEntry, setFinalEntry] = useState<TaskHistoryEntry | null>(null);
   const [resumeCheckpoint, setResumeCheckpoint] = useState<TaskExecutionCheckpoint | null>(null);
   const [mcpDisconnected, setMcpDisconnected] = useState(false);
+  const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
 
   const appendLog = (msg: string) => {
     setLog((prev) => [...prev, `${new Date().toLocaleTimeString()} ${msg}`]);
@@ -53,6 +54,23 @@ export const App: React.FC = () => {
     if (provider === 'ollama') return `Ollama does not require API key (using ${ollamaBaseUrl})`;
     if (provider === 'openrouter') return 'OpenRouter API key (or .env.local)';
     return 'API key';
+  }, [provider, ollamaBaseUrl]);
+
+  useEffect(() => {
+    const check = async () => {
+      if (provider !== 'ollama') {
+        setOllamaAvailable(null);
+        return;
+      }
+      try {
+        const p = new OllamaProvider(ollamaBaseUrl);
+        const ok = await p.isAvailable();
+        setOllamaAvailable(ok);
+      } catch {
+        setOllamaAvailable(false);
+      }
+    };
+    check();
   }, [provider, ollamaBaseUrl]);
 
   const handlePauseToggle = () => {
@@ -185,6 +203,9 @@ export const App: React.FC = () => {
                 <span>Kapture plugin is off or not connected</span>
               </div>
             ) : null}
+            <div className="provider-status">
+              Provider: {provider.toUpperCase()} | Ollama: {provider === 'ollama' ? (ollamaAvailable === null ? 'checking...' : ollamaAvailable ? 'available' : 'unavailable') : 'n/a'}
+            </div>
           </div>
           <div className={`status-pill status-${status}`}>{status.toUpperCase()}</div>
         </section>

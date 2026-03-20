@@ -73,16 +73,11 @@ export class LLMManager {
     for (const provider of candidates) {
       const isActive = provider.name === activeName;
       const available = await provider.isAvailable().catch(() => false);
-      if (!available && !isActive) {
+      if (!available) {
         this.logger(
           `[LLM] skip provider=${provider.name} isAvailable=false (activeProvider=${activeName})`,
         );
         continue;
-      }
-      if (!available && isActive) {
-        this.logger(
-          `[LLM] active provider isAvailable=false but will still try provider=${provider.name} (to surface real error)`,
-        );
       }
 
       this.logger(`[LLM] trying provider=${provider.name}`);
@@ -114,6 +109,11 @@ export class LLMManager {
       active,
       ...this.providerFallbackOrder.filter((n) => n !== active),
     ];
+
+    // Also include providers registered but not in fallback order.
+    for (const name of this.providers.keys()) {
+      if (!orderedNames.includes(name)) orderedNames.push(name);
+    }
 
     const providers: LLMProvider[] = [];
     for (const name of orderedNames) {
