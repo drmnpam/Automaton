@@ -49,6 +49,28 @@ The app is focused on reliable step-by-step execution instead of brittle one-sho
 - Kapture browser extension connected to at least one tab
 - API key for selected provider (unless using local Ollama)
 
+## Local Ollama setup (recommended for offline / self-hosted usage)
+
+1. Install Ollama:
+   - https://ollama.com/docs/installation
+2. Run Ollama daemon locally:
+   - `ollama serve`
+   - Или с явным портом (в случае прокси): `ollama serve --port 11434`
+3. Установите модель (пример):
+   - `ollama pull llama3.1`
+4. Настройте приложение:
+   - в `automation-client/.env.local` (или `.env.example`):
+     - `VITE_OLLAMA_URL=http://127.0.0.1:11434`
+
+Если вы запускаете клиент из браузера и встречаете CORS, используйте прокси:
+- Node.js / Express:
+  - `app.use('/ollama', createProxyMiddleware({ target: 'http://127.0.0.1:11434', changeOrigin: true }));`
+  - `VITE_OLLAMA_URL=http://localhost:5180/ollama`
+
+Примеры аналогичных репозиториев:
+- https://github.com/jmorganca/ollama-nextjs
+- https://github.com/ollama/web-ui
+
 ## Quick Start
 
 1. Configure environment:

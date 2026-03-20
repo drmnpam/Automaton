@@ -47,11 +47,13 @@ export const App: React.FC = () => {
   );
   const canPauseToggle = status === 'running' || status === 'paused';
 
+  const ollamaBaseUrl = import.meta.env.VITE_OLLAMA_URL || 'http://127.0.0.1:11434';
+
   const apiKeyPlaceholder = useMemo(() => {
-    if (provider === 'ollama') return 'Ollama does not require API key';
+    if (provider === 'ollama') return `Ollama does not require API key (using ${ollamaBaseUrl})`;
     if (provider === 'openrouter') return 'OpenRouter API key (or .env.local)';
     return 'API key';
-  }, [provider]);
+  }, [provider, ollamaBaseUrl]);
 
   const handlePauseToggle = () => {
     if (!canPauseToggle) return;
@@ -100,7 +102,7 @@ export const App: React.FC = () => {
       const llmManager = new LLMManager(appendLog);
       llmManager.registerProvider(new GeminiProvider(apiKey));
       llmManager.registerProvider(new OpenRouterProvider(apiKey));
-      llmManager.registerProvider(new OllamaProvider());
+      llmManager.registerProvider(new OllamaProvider(ollamaBaseUrl));
       llmManager.registerProvider(new OpenAIProvider(apiKey));
       llmManager.registerProvider(new ClaudeProvider(apiKey));
       llmManager.registerProvider(new DeepSeekProvider(apiKey));
@@ -216,6 +218,11 @@ export const App: React.FC = () => {
                 disabled={provider === 'ollama'}
               />
             </label>
+            {provider === 'ollama' ? (
+              <div className="info-text">
+                Ollama endpoint: <strong>{ollamaBaseUrl}</strong> (set via <code>VITE_OLLAMA_URL</code>)
+              </div>
+            ) : null}
           </div>
 
           <label className="field-label">

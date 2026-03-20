@@ -15,10 +15,10 @@ export class OllamaProvider implements LLMProvider {
     return typeof window !== 'undefined' && typeof document !== 'undefined';
   }
 
-  // Used by LLMManager to soft-skip this provider in environments where it cannot work (e.g. browser CORS).
+  // Used by LLMManager to soft-skip this provider in environments where it cannot work.
   async isAvailable(): Promise<boolean> {
-    if (this.isBrowser()) return false;
-    // Best-effort check (Node/bundler environment).
+    if (!this.baseUrl) return false;
+    // Best-effort check (Node/browser). If using browser with CORS, ensure portal/proxy is configured.
     try {
       const res = await fetch(`${this.baseUrl}/api/tags`, { method: 'GET' });
       return res.ok;
@@ -32,13 +32,6 @@ export class OllamaProvider implements LLMProvider {
   }
 
   async generate(request: LLMRequest): Promise<LLMResponse> {
-    if (this.isBrowser()) {
-      const err = new Error(
-        'Ollama not running or not reachable from the browser (CORS). Use a backend/proxy to call Ollama.',
-      );
-      (err as any).kind = 'unavailable' as ErrorKind;
-      throw err;
-    }
 
     const model = request.model || this.defaultModel;
 
