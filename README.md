@@ -55,6 +55,7 @@ The app is focused on reliable step-by-step execution instead of brittle one-sho
    - copy `automation-client/.env.example` to `.env.local` if needed
    - set provider keys and MCP URL
    - optional: set `KAPTURE_MCP_START_CMD` for launcher MCP auto-start
+   - recommended MCP command: `KAPTURE_MCP_START_CMD=npx -y kapture-mcp bridge`
 2. Install and run:
    - `cd automation-client`
    - `npm install`

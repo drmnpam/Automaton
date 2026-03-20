@@ -92,6 +92,8 @@ if (Test-PortListening -Port $mcpPort) {
     $commands = @($customMcpCmd)
   } else {
     $commands = @(
+      "npx -y kapture-mcp bridge",
+      "npx -y kapture-mcp server",
       "kapture-mcp --transport websocket --port $mcpPort",
       "kapture mcp --transport websocket --port $mcpPort"
     )
