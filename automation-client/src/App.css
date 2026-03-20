@@ -112,6 +112,24 @@ body {
   color: var(--ink-soft);
 }
 
+.mcp-warning {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(185, 28, 28, 0.25);
+  background: rgba(239, 68, 68, 0.12);
+  color: #7f1d1d;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mcp-warning-icon {
+  font-weight: 800;
+}
+
 .status-pill {
   border-radius: 999px;
   padding: 8px 14px;

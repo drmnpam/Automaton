@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import './App.css';
 import { GeminiProvider } from './core/llm/providers/GeminiProvider';
 import { LLMManager } from './core/llm/LLMManager';
@@ -31,6 +31,7 @@ export const App: React.FC = () => {
   const [lastStepResult, setLastStepResult] = useState<any>(null);
   const [finalEntry, setFinalEntry] = useState<TaskHistoryEntry | null>(null);
   const [resumeCheckpoint, setResumeCheckpoint] = useState<TaskExecutionCheckpoint | null>(null);
+  const [mcpDisconnected, setMcpDisconnected] = useState(false);
 
   const appendLog = (msg: string) => {
     setLog((prev) => [...prev, `${new Date().toLocaleTimeString()} ${msg}`]);
@@ -82,6 +83,7 @@ export const App: React.FC = () => {
       setStatus('running');
       setIsPaused(false);
       pausedRef.current = false;
+      setMcpDisconnected(false);
 
       if (opts.mode === 'fresh') {
         setLog([]);
@@ -147,6 +149,9 @@ export const App: React.FC = () => {
     } catch (e) {
       const err = e as Error;
       appendLog(`Fatal error: ${err.message}`);
+      if (isMcpDisconnectedError(err.message)) {
+        setMcpDisconnected(true);
+      }
       setStatus('error');
     } finally {
       setIsPaused(false);
@@ -172,6 +177,12 @@ export const App: React.FC = () => {
           <div className="hero-title-wrap">
             <h1 className="hero-title">Browser Automation</h1>
             <p className="hero-subtitle">Kapture MCP + Multi-LLM Agent</p>
+            {mcpDisconnected ? (
+              <div className="mcp-warning" role="status" aria-live="polite">
+                <span className="mcp-warning-icon">[!]</span>
+                <span>Kapture plugin is off or not connected</span>
+              </div>
+            ) : null}
           </div>
           <div className={`status-pill status-${status}`}>{status.toUpperCase()}</div>
         </section>
@@ -283,3 +294,12 @@ export const App: React.FC = () => {
     </div>
   );
 };
+
+function isMcpDisconnectedError(message: string) {
+  const m = (message ?? '').toLowerCase();
+  return (
+    m.includes('mcp preflight failed') ||
+    m.includes('kapture extension is not connected') ||
+    m.includes('no tabs connected in kapture mcp')
+  );
+}
