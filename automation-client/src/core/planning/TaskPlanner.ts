@@ -61,9 +61,10 @@ SPECIFIC STRATEGIES FOR COMMON SITES:
 ═══════════════════════════════════════════════════════════════════════════════
 
 **For HH.ru (Russian job site):**
-- Search input: look for [data-qa*="search"] or input[role="searchbox"]
-- Vacancy list: [data-qa*="vacancy"], [data-qa*="vacancy-item"]
-- Apply button: [data-qa*="apply"], [data-qa*="respond"]
+- Search input: input[type="text"], input[placeholder*="профессия"], input[placeholder*="должность"], [data-qa*="search-input"] (but check if it's actually an input, not a link!)
+- If extract shows "Произошла ошибка": use open_url with current URL to reload page
+- Vacancy list: [data-qa*="vacancy"], [data-qa*="vacancy-item"], div[class*="vacancy"]
+- Apply button: [data-qa*="apply"], [data-qa*="respond"], button containing "Откликнуться"
 
 **For LinkedIn:**
 - Search: [data-testid*="search"] or input with aria-label
@@ -84,17 +85,21 @@ SPECIFIC STRATEGIES FOR COMMON SITES:
 DECISION TREE - WHAT TO DO NEXT:
 ═══════════════════════════════════════════════════════════════════════════════
 
-1. Did last action FAIL? (error returned)
+1. If extract shows page error ("Произошла ошибка", "Page not found", etc):
+   → Use press_key with key="F5" to reload the page
+   → Wait a moment, then extract body again
+
+2. Did last action FAIL? (error returned)
    → Is it "not fillable"? → Find input field instead (extract if needed)
    → Is it "not found"? → Extract body to understand structure
    → Other error? → Extract or scroll to find correct element
 
-2. Did last action SUCCEED?
+3. Did last action SUCCEED?
    → Did page change? → Extract to understand new content
    → No change? → Try next step OR extract to see if hidden content
    → Task complete? → status="done"
 
-3. Are you repeating similar actions?
+4. Are you repeating similar actions?
    → Do you have the info you need? → ACT on it (click, type, etc)
    → Do NOT keep extracting the same selector
    → Try scrolling, pressing keys, or clicking different elements
@@ -170,18 +175,30 @@ DO try: new selector patterns, keyboard shortcuts, scrolling, waiting.
 → Try completely different attribute: look for aria-label, role, class patterns
 → DO NOT use same selector again\n\n`;
       } else if (params.lastErrorMessage.includes('Loop detected') || params.lastErrorMessage.includes('loop')) {
-        errorContext = `⚠️ LOOP DETECTED: You're repeating actions that don't advance
-→ If extract body doesn't change, use extract with HTML strategy instead
-→ If same selector fails: click different elements or scroll
+        errorContext = `🚨 URGENT LOOP DETECTED: You're repeating actions that don't advance
+→ IMMEDIATELY STOP extracting the same thing
+→ If extract body doesn't change: use open_url with current URL to reload page
+→ If same selector fails: use extract with HTML strategy on different element
 → Try NEW strategies: keyboard shortcuts (Tab, Enter), scroll up/down, look for alternative elements
-→ If stuck 3+ steps, consider task impossible and use status="done"\n\n`;
+→ If stuck 3+ steps, use status="done" with finalResult="Cannot proceed due to repeated failures"\n\n`;
       }
+    }
+    
+    // Check if last observation contains page error
+    if (params.lastObservation && typeof params.lastObservation.text === 'string' && 
+        (params.lastObservation.text.includes('Произошла ошибка') || 
+         params.lastObservation.text.includes('Page not found') ||
+         params.lastObservation.text.includes('error'))) {
+      errorContext += `🚨 PAGE ERROR DETECTED: "${params.lastObservation.text.slice(0, 100)}..."
+→ Use open_url with current URL to reload the page
+→ Then extract body again to check if page loaded properly\n\n`;
     }
     
     const fullUserPrompt =
       `TASK:\n${intent}\n\n` +
       `ACTIONS_TAIL:\n${this.actionsTail(params.actionsSoFar, 8)}\n\n` +
       `LAST_OBSERVATION_SUMMARY:\n${this.summarizeObservation(params.lastObservation)}\n\n` +
+      `CURRENT_URL:\n${params.lastObservation?.url || 'unknown'}\n\n` +
       `LAST_ERROR:\n${params.lastErrorMessage ? params.lastErrorMessage : 'none'}\n` +
       (errorContext ? `${errorContext}\n` : '\n') +
       (loopDetection.isLooped ? `⚠️ WARNING: You are in a LOOP - "${loopDetection.failedSelector}" repeated ${loopDetection.count} times.\nIMEDIATELY switch strategy: try different selector OR use extract to understand page structure.\n\n` : '') +

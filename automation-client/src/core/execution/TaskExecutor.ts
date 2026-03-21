@@ -310,7 +310,7 @@ export class TaskExecutor {
           };
           this.callbacks.onStepLog(`[PlannerHint] ${lastErrorMessage}`);
 
-          if (repeatedExecutedSignatureCount >= 5) {
+          if (repeatedExecutedSignatureCount >= 3) {
             const fatal = `Planner loop stop: identical step repeated ${repeatedExecutedSignatureCount} times`;
             const finishedAt = Date.now();
             const entry: TaskHistoryEntry = {

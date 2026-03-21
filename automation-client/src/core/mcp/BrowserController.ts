@@ -258,6 +258,17 @@ export class BrowserController {
         if (!key) throw new Error('press_key requires key');
         this.logger(`[MCP] press_key key=${key}`);
 
+        // Special handling for F5 (reload)
+        if (key === 'F5' && this.lastKnownUrl) {
+          this.logger(`[MCP] press_key F5 -> fallback to open_url reload`);
+          return await this.executeAction({
+            ...action,
+            action: 'open_url',
+            value: this.lastKnownUrl,
+            description: action.description,
+          });
+        }
+
         const attempts: Array<{ name: string; args: Record<string, any> }> = [
           { name: 'press_key', args: { tabId, key } },
           { name: 'press', args: { tabId, key } },

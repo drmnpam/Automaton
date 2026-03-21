@@ -40,6 +40,24 @@ export const App: React.FC = () => {
 
   const ollamaControl = useMemo(() => new OllamaControl(), []);
 
+  // Auto-connect MCP on app start
+  useEffect(() => {
+    const connectMcp = async () => {
+      appendLog('[MCP] Auto-connecting on startup...');
+      try {
+        const mcp = new MCPClient(appendLog);
+        await mcp.connect();
+        appendLog('[MCP] Connected successfully');
+        setMcpDisconnected(false);
+      } catch (e) {
+        const msg = (e as Error).message;
+        appendLog(`[MCP] Connection failed: ${msg}`);
+        setMcpDisconnected(true);
+      }
+    };
+    connectMcp();
+  }, []);
+
   const appendLog = (msg: string) => {
     setLog((prev) => [...prev, `${new Date().toLocaleTimeString()} ${msg}`]);
   };
@@ -72,6 +90,25 @@ export const App: React.FC = () => {
         const p = new OllamaProvider(ollamaBaseUrl);
         const ok = await p.isAvailable();
         setOllamaAvailable(ok);
+        
+        // Auto-start Ollama if not available
+        if (!ok) {
+          appendLog('[Ollama] Not available, auto-starting...');
+          setOllamaStarting(true);
+          const result = await ollamaControl.startOllama();
+          appendLog(`[Ollama] ${result.message}`);
+          
+          if (result.success) {
+            // Wait and re-check availability
+            await new Promise((r) => setTimeout(r, 3000));
+            const recheck = await p.isAvailable();
+            setOllamaAvailable(recheck);
+            appendLog(`[Ollama] Available after start: ${recheck}`);
+          } else {
+            appendLog(`[Ollama] Auto-start failed: ${result.message}`);
+          }
+          setOllamaStarting(false);
+        }
       } catch {
         setOllamaAvailable(false);
       }

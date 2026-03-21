@@ -152,6 +152,36 @@ if (Test-PortListening -Port $mcpPort) {
   }
 }
 
+# Start Ollama Manager (port 5182)
+$ollamaPort = 5182
+$ollamaLog = Join-Path $appDir "launcher-ollama-$stamp.log"
+$ollamaErr = Join-Path $appDir "launcher-ollama-$stamp.err.log"
+
+if (Test-PortListening -Port $ollamaPort) {
+  Write-Host "[launcher] OK Ollama manager already listening on :$ollamaPort"
+} else {
+  Write-Host "[launcher] Ollama manager not listening on :$ollamaPort, starting..."
+  $ollamaProcess = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', "npm run serve:ollama 1> `"$ollamaLog`" 2> `"$ollamaErr`"" -WorkingDirectory $appDir -WindowStyle Hidden -PassThru
+  
+  # Wait for Ollama manager (up to 10 seconds)
+  $ollamaStarted = $false
+  for ($i = 0; $i -lt 20; $i++) {
+    Start-Sleep -Milliseconds 500
+    if (Test-PortListening -Port $ollamaPort) {
+      Write-Host "[launcher] OK Ollama manager started on :$ollamaPort"
+      $ollamaStarted = $true
+      break
+    }
+  }
+  
+  if (-not $ollamaStarted) {
+    Write-Host "[launcher] FAIL Ollama manager auto-start failed"
+    Write-Host "[launcher] Check logs:"
+    Write-Host "  $ollamaLog"
+    Write-Host "  $ollamaErr"
+  }
+}
+
 $autoOpenBrowserRaw = Get-EnvVarValue -Key 'KAPTURE_AUTO_OPEN_BROWSER' -Files $envFiles
 $autoOpenBrowser = if (-not $autoOpenBrowserRaw) { $true } else { @('1','true','yes','on') -contains $autoOpenBrowserRaw.ToLowerInvariant() }
 
