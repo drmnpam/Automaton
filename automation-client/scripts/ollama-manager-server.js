@@ -1,12 +1,10 @@
 import express from 'express';
-import { spawn, exec } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 
-const execAsync = promisify(exec);
 const app = express();
 app.use(express.json());
 
-let ollamaProcess: any = null;
+let ollamaProcess = null;
 
 app.get('/status', async (req, res) => {
   try {
@@ -47,7 +45,7 @@ app.post('/start', async (req, res) => {
 
     res.status(500).json({ error: 'Failed to start Ollama. Is it installed and in PATH?' });
   } catch (err) {
-    res.status(500).json({ error: (err as any).message });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -58,7 +56,7 @@ app.post('/stop', (req, res) => {
       ollamaProcess = null;
       res.json({ status: 'stopped' });
     } catch (err) {
-      res.status(500).json({ error: (err as any).message });
+      res.status(500).json({ error: err.message });
     }
   } else {
     res.json({ status: 'not running' });

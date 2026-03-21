@@ -1,32 +1,18 @@
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import net from 'net';
 
 const MCP_PORT = process.env.MCP_PORT || 61822;
 const MCP_HOST = process.env.MCP_HOST || '127.0.0.1';
 
-interface JsonRpcRequest {
-  jsonrpc: '2.0';
-  id: string | number;
-  method: string;
-  params?: any;
-}
-
-interface JsonRpcResponse {
-  jsonrpc: '2.0';
-  id: string | number;
-  result?: any;
-  error?: { code: number; message: string };
-}
-
 // Connected browser tabs
-const tabs = new Map<string, { ws: WebSocket; url?: string; title?: string }>();
+const tabs = new Map();
 let tabIdCounter = 1;
 
 // Track pending operations from client
-const pendingOperations = new Map<string | number, { resolve: (v: any) => void; reject: (e: any) => void }>();
+const pendingOperations = new Map();
 
-function createResponse(req: JsonRpcRequest, result?: any, error?: { code: number; message: string }): JsonRpcResponse {
+function createResponse(req, result, error) {
   if (error) {
     return { jsonrpc: '2.0', id: req.id, error };
   }
@@ -40,7 +26,7 @@ const wss = new WebSocketServer({ server: httpServer, path: '/mcp' });
 const browserWss = new WebSocketServer({ server: httpServer, path: '/browser' });
 
 // Handle browser extension connections
-browserWss.on('connection', (ws, req) => {
+browserWss.on('connection', (ws) => {
   const tabId = `tab-${tabIdCounter++}`;
   console.log(`[MCP] Browser connected: ${tabId}`);
   tabs.set(tabId, { ws });
@@ -50,7 +36,7 @@ browserWss.on('connection', (ws, req) => {
       const msg = JSON.parse(data.toString());
       // Handle browser responses to pending operations
       if (msg.id && pendingOperations.has(msg.id)) {
-        const pending = pendingOperations.get(msg.id)!;
+        const pending = pendingOperations.get(msg.id);
         pendingOperations.delete(msg.id);
         if (msg.error) {
           pending.reject(new Error(msg.error.message));
@@ -74,17 +60,21 @@ browserWss.on('connection', (ws, req) => {
 });
 
 // Handle MCP client connections
-wss.on('connection', (ws, req) => {
+wss.on('connection', (ws) => {
   console.log('[MCP] Client connected');
 
   ws.on('message', async (data) => {
     try {
-      const req: JsonRpcRequest = JSON.parse(data.toString());
+      const req = JSON.parse(data.toString());
       console.log(`[MCP] Request: ${req.method}`);
 
       // Handle initialize
       if (req.method === 'initialize') {
-        ws.send(JSON.stringify(createResponse(req, { protocolVersion: '2024-11-05', serverInfo: { name: 'kapture-mcp-server', version: '1.0.0' }, capabilities: {} })));
+        ws.send(JSON.stringify(createResponse(req, { 
+          protocolVersion: '2024-11-05', 
+          serverInfo: { name: 'kapture-mcp-server', version: '1.0.0' }, 
+          capabilities: {} 
+        })));
         return;
       }
 
@@ -115,7 +105,10 @@ wss.on('connection', (ws, req) => {
         // Find first available tab
         const firstTab = tabs.entries().next().value;
         if (!firstTab) {
-          ws.send(JSON.stringify(createResponse(req, undefined, { code: -32000, message: 'No browser tabs connected. Open Kapture extension.' })));
+          ws.send(JSON.stringify(createResponse(req, undefined, { 
+            code: -32000, 
+            message: 'No browser tabs connected. Open Kapture extension.' 
+          })));
           return;
         }
 
@@ -124,15 +117,23 @@ wss.on('connection', (ws, req) => {
         // Forward to browser and wait for response
         try {
           const result = await forwardToBrowser(tab.ws, req.id, name, { ...args, tabId });
-          ws.send(JSON.stringify(createResponse(req, { content: [{ type: 'text', text: JSON.stringify(result) }] })));
+          ws.send(JSON.stringify(createResponse(req, { 
+            content: [{ type: 'text', text: JSON.stringify(result) }] 
+          })));
         } catch (err) {
-          ws.send(JSON.stringify(createResponse(req, undefined, { code: -32000, message: (err as Error).message })));
+          ws.send(JSON.stringify(createResponse(req, undefined, { 
+            code: -32000, 
+            message: err.message 
+          })));
         }
         return;
       }
 
       // Default response
-      ws.send(JSON.stringify(createResponse(req, undefined, { code: -32601, message: `Method not found: ${req.method}` })));
+      ws.send(JSON.stringify(createResponse(req, undefined, { 
+        code: -32601, 
+        message: `Method not found: ${req.method}` 
+      })));
     } catch (e) {
       console.error('[MCP] Error:', e);
       ws.send(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }));
@@ -148,7 +149,7 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-function forwardToBrowser(ws: WebSocket, id: string | number, method: string, params: any): Promise<any> {
+function forwardToBrowser(ws, id, method, params) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       pendingOperations.delete(id);
@@ -171,7 +172,7 @@ function forwardToBrowser(ws: WebSocket, id: string | number, method: string, pa
 }
 
 // Check if port is already in use
-function isPortInUse(port: number): Promise<boolean> {
+function isPortInUse(port) {
   return new Promise((resolve) => {
     const tester = net.createServer()
       .once('error', () => resolve(true))
@@ -179,7 +180,7 @@ function isPortInUse(port: number): Promise<boolean> {
         tester.close();
         resolve(false);
       })
-      .listen(port, MCP_HOST as string);
+      .listen(port, MCP_HOST);
   });
 }
 
@@ -190,7 +191,7 @@ async function start() {
     process.exit(0);
   }
 
-  httpServer.listen(Number(MCP_PORT), MCP_HOST as string, () => {
+  httpServer.listen(Number(MCP_PORT), MCP_HOST, () => {
     console.log(`[MCP] Server running on ws://${MCP_HOST}:${MCP_PORT}/mcp`);
     console.log(`[MCP] Browser extension endpoint: ws://${MCP_HOST}:${MCP_PORT}/browser`);
   });

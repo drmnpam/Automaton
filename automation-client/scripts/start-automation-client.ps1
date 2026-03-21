@@ -185,23 +185,8 @@ if (Test-PortListening -Port $ollamaPort) {
 $autoOpenBrowserRaw = Get-EnvVarValue -Key 'KAPTURE_AUTO_OPEN_BROWSER' -Files $envFiles
 $autoOpenBrowser = if (-not $autoOpenBrowserRaw) { $true } else { @('1','true','yes','on') -contains $autoOpenBrowserRaw.ToLowerInvariant() }
 
-if ($autoOpenBrowser) {
-  $browserPathCfg = Get-EnvVarValue -Key 'KAPTURE_BROWSER_PATH' -Files $envFiles
-  $browserTargetUrl = Get-EnvVarValue -Key 'KAPTURE_AUTOMATION_URL' -Files $envFiles
-  if (-not $browserTargetUrl) { $browserTargetUrl = 'https://hh.ru' }
-
-  $browserExe = Resolve-BrowserPath -PreferredPath $browserPathCfg
-  if ($browserExe) {
-    try {
-      Start-Process -FilePath $browserExe -ArgumentList $browserTargetUrl | Out-Null
-      Write-Host "[launcher] automation browser opened: $browserExe -> $browserTargetUrl"
-    } catch {
-      Write-Host "[launcher] failed to open automation browser: $($_.Exception.Message)"
-    }
-  } else {
-    Write-Host "[launcher] no Chromium browser detected for auto-open (set KAPTURE_BROWSER_PATH in .env.local)"
-  }
-}
+# Removed: Automation browser auto-open (KAPTURE_AUTOMATION_URL)
+# Now only opens the app itself below
 
 $existing = Get-NetTCPConnection -LocalPort 5180 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($existing) {
