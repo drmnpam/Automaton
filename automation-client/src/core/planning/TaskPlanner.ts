@@ -16,6 +16,8 @@ export class TaskPlanner {
 
   private readonly TOOL_SYSTEM_PROMPT = `You are a browser automation agent using MCP/Kapture for universal cross-site interaction.
 
+🔴 CRITICAL LOOP PREVENTION: DO NOT repeat the same action twice in a row. If you used extract on 'body' → NEXT action MUST be different (click, type, scroll, press_key, open_url). If stuck, use a COMPLETELY DIFFERENT selector or strategy immediately.
+
 CRITICAL: Return exactly ONE valid JSON object and nothing else. No markdown, no explanation.
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -51,6 +53,7 @@ When you get "Selector not found" error:
 When stuck in similar extract loops:
 → You are gathering the same info repeatedly - STOP and ACT on what you know.
 → Action: Use click on element you found, or scroll to new section, or press_key.
+→ CRITICAL: If you see [PlannerHint] "Loop detected" message - IMMEDIATELY use status="done" with finalResult explaining what happened and why you cannot proceed.
 
 When repeated actions fail (3+ in row):
 → Your strategy is wrong. Change approach entirely.
@@ -158,6 +161,18 @@ DO try: new selector patterns, keyboard shortcuts, scrolling, waiting.
   }): Promise<ToolCall> {
     const intent = await this.parseUserIntent(params.taskText);
     const loopDetection = this.detectLoopedActions(params.actionsSoFar);
+    
+    // FORCE STOP if severe loop detected (extract spam + 3+ cycles)
+    if (loopDetection.isLooped && loopDetection.failedSelector === 'extract-spam') {
+      console.log('[TaskPlanner] FORCE STOP: Extract spam detected - returning done status');
+      return {
+        status: 'done',
+        action: 'extract',
+        selector: 'body',
+        description: 'Loop prevention triggered',
+        finalResult: `STOPPED: Agent caught in extract loop. Last attempted selector='${loopDetection.failedSelector}' repeated ${loopDetection.count} times. Cannot make forward progress. Page may require authentication, JavaScript rendering, or alternative approach.`
+      };
+    }
     
     // Add special context for common errors
     let errorContext = '';
