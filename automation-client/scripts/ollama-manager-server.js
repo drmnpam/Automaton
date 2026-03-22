@@ -1,6 +1,8 @@
 import express from 'express';
-import { spawn } from 'child_process';
+import { spawn, exec } from 'child_process';
+import { promisify } from 'util';
 
+const execAsync = promisify(exec);
 const app = express();
 app.use(express.json());
 
