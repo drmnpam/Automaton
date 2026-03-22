@@ -60,29 +60,37 @@ browserWss.on('connection', (ws) => {
 });
 
 // Handle MCP client connections
-wss.on('connection', (ws) => {
-  console.log('[MCP] Client connected');
+wss.on('connection', (ws, req) => {
+  const clientIp = req.socket.remoteAddress;
+  console.log(`[MCP] Client connected from ${clientIp}`);
+  
+  // Set up ping to keep connection alive
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
 
   ws.on('message', async (data) => {
     try {
       const raw = data.toString();
       console.log(`[MCP] Raw message: ${raw.substring(0, 200)}`);
-      const req = JSON.parse(raw);
-      console.log(`[MCP] Request: ${req.method} (id=${req.id})`);
+      const msg = JSON.parse(raw);
+      console.log(`[MCP] Request: ${msg.method} (id=${msg.id})`);
 
       // Handle initialize
-      if (req.method === 'initialize') {
-        ws.send(JSON.stringify(createResponse(req, { 
+      if (msg.method === 'initialize') {
+        console.log('[MCP] Sending initialize response...');
+        const response = createResponse(msg, { 
           protocolVersion: '2024-11-05', 
           serverInfo: { name: 'kapture-mcp-server', version: '1.0.0' }, 
           capabilities: {} 
-        })));
+        });
+        ws.send(JSON.stringify(response));
+        console.log('[MCP] Initialize response sent');
         return;
       }
 
       // Handle tools/list
-      if (req.method === 'tools/list') {
-        ws.send(JSON.stringify(createResponse(req, {
+      if (msg.method === 'tools/list') {
+        ws.send(JSON.stringify(createResponse(msg, {
           tools: [
             { name: 'list_tabs', description: 'List connected browser tabs' },
             { name: 'new_tab', description: 'Open new browser tab' },
@@ -101,13 +109,13 @@ wss.on('connection', (ws) => {
       }
 
       // Handle tools/call - forward to browser
-      if (req.method === 'tools/call') {
-        const { name, arguments: args } = req.params || {};
+      if (msg.method === 'tools/call') {
+        const { name, arguments: args } = msg.params || {};
         
         // Find first available tab
         const firstTab = tabs.entries().next().value;
         if (!firstTab) {
-          ws.send(JSON.stringify(createResponse(req, undefined, { 
+          ws.send(JSON.stringify(createResponse(msg, undefined, { 
             code: -32000, 
             message: 'No browser tabs connected. Open Kapture extension.' 
           })));
@@ -118,12 +126,12 @@ wss.on('connection', (ws) => {
         
         // Forward to browser and wait for response
         try {
-          const result = await forwardToBrowser(tab.ws, req.id, name, { ...args, tabId });
-          ws.send(JSON.stringify(createResponse(req, { 
+          const result = await forwardToBrowser(tab.ws, msg.id, name, { ...args, tabId });
+          ws.send(JSON.stringify(createResponse(msg, { 
             content: [{ type: 'text', text: JSON.stringify(result) }] 
           })));
         } catch (err) {
-          ws.send(JSON.stringify(createResponse(req, undefined, { 
+          ws.send(JSON.stringify(createResponse(msg, undefined, { 
             code: -32000, 
             message: err.message 
           })));
@@ -132,9 +140,9 @@ wss.on('connection', (ws) => {
       }
 
       // Default response
-      ws.send(JSON.stringify(createResponse(req, undefined, { 
+      ws.send(JSON.stringify(createResponse(msg, undefined, { 
         code: -32601, 
-        message: `Method not found: ${req.method}` 
+        message: `Method not found: ${msg.method}` 
       })));
     } catch (e) {
       console.error('[MCP] Error processing message:', e.message);
@@ -143,8 +151,8 @@ wss.on('connection', (ws) => {
     }
   });
 
-  ws.on('close', () => {
-    console.log('[MCP] Client disconnected');
+  ws.on('close', (code, reason) => {
+    console.log(`[MCP] Client disconnected (code=${code}, reason=${reason})`);
   });
 
   ws.on('error', (err) => {
