@@ -5,11 +5,15 @@ type ErrorKind = 'network' | 'api' | 'model' | 'unavailable';
 
 export class OllamaProvider implements LLMProvider {
   name = 'ollama';
+  private logger?: (msg: string) => void;
 
   constructor(
     private baseUrl = 'http://127.0.0.1:11434',
     private defaultModel = 'llama3.1',
-  ) {}
+    logger?: (msg: string) => void,
+  ) {
+    this.logger = logger;
+  }
 
   private isBrowser() {
     return typeof window !== 'undefined' && typeof document !== 'undefined';
@@ -17,12 +21,25 @@ export class OllamaProvider implements LLMProvider {
 
   // Used by LLMManager to soft-skip this provider in environments where it cannot work.
   async isAvailable(): Promise<boolean> {
-    if (!this.baseUrl) return false;
+    if (!this.baseUrl) {
+      this.logger?.(`[Ollama] no baseUrl configured`);
+      return false;
+    }
     // Best-effort check (Node/browser). If using browser with CORS, ensure portal/proxy is configured.
     try {
-      const res = await fetch(`${this.baseUrl}/api/tags`, { method: 'GET' });
-      return res.ok;
-    } catch {
+      const url = `${this.baseUrl}/api/tags`;
+      this.logger?.(`[Ollama] checking availability at ${url}...`);
+      const res = await fetch(url, { method: 'GET' });
+      const available = res.ok;
+      if (available) {
+        this.logger?.(`[Ollama] available (HTTP ${res.status})`);
+      } else {
+        this.logger?.(`[Ollama] unavailable (HTTP ${res.status})`);
+      }
+      return available;
+    } catch (e) {
+      const err = e as Error;
+      this.logger?.(`[Ollama] connection failed: ${err.message}`);
       return false;
     }
   }
@@ -46,6 +63,8 @@ export class OllamaProvider implements LLMProvider {
 
     const prompt = system ? `${system}\n\n${user}` : user;
 
+    this.logger?.(`[Ollama] generate request: model=${model} baseUrl=${this.baseUrl} promptLength=${prompt.length}`);
+
     // Ollama REST "chat" endpoint.
     const res = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
@@ -63,13 +82,16 @@ export class OllamaProvider implements LLMProvider {
 
     if (!res.ok) {
       const text = await res.text();
-      const err = new Error(`Ollama API error (HTTP ${res.status}): ${text}`);
+      const errMsg = `Ollama API error (HTTP ${res.status}): ${text}`;
+      this.logger?.(`[Ollama] ${errMsg}`);
+      const err = new Error(errMsg);
       (err as any).kind = 'api' as ErrorKind;
       throw err;
     }
 
     const json = (await res.json()) as any;
     const content = json?.message?.content ?? '';
+    this.logger?.(`[Ollama] response received: length=${content.length}`);
 
     return {
       provider: this.name,
