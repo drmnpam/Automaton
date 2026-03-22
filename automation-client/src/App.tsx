@@ -76,7 +76,7 @@ export const App: React.FC = () => {
       }
       try {
         appendLog(`[UI] checking Ollama availability at ${ollamaBaseUrl}...`);
-        const p = new OllamaProvider(ollamaBaseUrl, 'llama3.1', appendLog);
+        const p = new OllamaProvider(ollamaBaseUrl, 'mistral', appendLog);
         const ok = await p.isAvailable();
         setOllamaAvailable(ok);
         appendLog(`[UI] Ollama available: ${ok}`);
@@ -98,7 +98,7 @@ export const App: React.FC = () => {
       // Wait and re-check availability
       appendLog('[UI] Waiting for Ollama to fully start...');
       await new Promise((r) => setTimeout(r, 2000));
-      const p = new OllamaProvider(ollamaBaseUrl, 'llama3.1', appendLog);
+      const p = new OllamaProvider(ollamaBaseUrl, 'mistral', appendLog);
       const ok = await p.isAvailable();
       setOllamaAvailable(ok);
       if (ok) {
@@ -158,7 +158,7 @@ export const App: React.FC = () => {
       const llmManager = new LLMManager(appendLog);
       llmManager.registerProvider(new GeminiProvider(apiKey));
       llmManager.registerProvider(new OpenRouterProvider(apiKey));
-      llmManager.registerProvider(new OllamaProvider(ollamaBaseUrl, 'llama3.1', appendLog));
+      llmManager.registerProvider(new OllamaProvider(ollamaBaseUrl, 'mistral', appendLog));
       llmManager.registerProvider(new OpenAIProvider(apiKey));
       llmManager.registerProvider(new ClaudeProvider(apiKey));
       llmManager.registerProvider(new DeepSeekProvider(apiKey));
